@@ -1,0 +1,149 @@
+#pragma kernel BuildQuadtree
+#pragma kernel DetectCollisions
+
+struct Circle
+{
+    float2 position;
+    float radius;
+    int id;
+};
+
+struct Node
+{
+    float4 bounds; // x, y, width, height
+    uint count;
+    int firstChild;
+    uint level;
+};
+
+RWStructuredBuffer<Circle> circles;
+RWStructuredBuffer<Node> nodes;
+RWStructuredBuffer<uint> collisions;
+
+#define MAX_CIRCLES 10000
+#define MAX_NODES 1024
+#define MAX_DEPTH 5
+#define MAX_OBJECTS 4
+#define STACK_SIZE 128
+
+void Subdivide(uint nodeIndex)
+{
+    Node node = nodes[nodeIndex];
+
+    float subWidth = node.bounds.z / 2.0;
+    float subHeight = node.bounds.w / 2.0;
+
+    nodes[nodeIndex].firstChild = nodeIndex * 4 + 1;
+    for (uint i = 0; i < 4; i++)
+    {
+        float offsetX = (i & 1) == 0 ? 0 : subWidth;
+        float offsetY = (i >> 1) == 0 ? 0 : subHeight;
+        nodes[node.firstChild + i].bounds = float4(node.bounds.x + offsetX, node.bounds.y + offsetY, subWidth, subHeight);
+        nodes[node.firstChild + i].count = 0;
+        nodes[node.firstChild + i].firstChild = -1;
+        nodes[node.firstChild + i].level = node.level + 1;
+    }
+}
+
+bool IsCircleInNode(Circle circle, Node node)
+{
+    return circle.position.x >= node.bounds.x && circle.position.x < node.bounds.x + node.bounds.z &&
+           circle.position.y >= node.bounds.y && circle.position.y < node.bounds.y + node.bounds.w;
+}
+
+void Insert(Circle circle, uint nodeIndex)
+{
+    uint stack[STACK_SIZE];
+    uint stackIndex = 0;
+    stack[stackIndex++] = nodeIndex;
+
+    while (stackIndex > 0)
+    {
+        uint currentIndex = stack[--stackIndex];
+        Node node = nodes[currentIndex];
+
+        if (node.count < MAX_OBJECTS || node.level >= MAX_DEPTH)
+        {
+            nodes[currentIndex].count++;
+            continue;
+        }
+
+        if (node.count == MAX_OBJECTS)
+        {
+            Subdivide(currentIndex);
+        }
+
+        for (uint i = 0; i < 4; i++)
+        {
+            Node child = nodes[node.firstChild + i];
+            if (IsCircleInNode(circle, child))
+            {
+                stack[stackIndex++] = node.firstChild + i;
+                break;
+            }
+        }
+    }
+}
+
+[numthreads(64, 1, 1)]
+void BuildQuadtree(uint3 id : SV_DispatchThreadID)
+{
+    uint circleIndex = id.x;
+    if (circleIndex >= MAX_CIRCLES)
+        return;
+
+    Circle circle = circles[circleIndex];
+    Insert(circle, 0);
+}
+
+void DetectCollision(Circle circle, uint nodeIndex, inout uint collisionCount)
+{
+    uint stack[STACK_SIZE];
+    uint stackIndex = 0;
+    stack[stackIndex++] = nodeIndex;
+
+    while (stackIndex > 0)
+    {
+        uint currentIndex = stack[--stackIndex];
+        Node node = nodes[currentIndex];
+
+        if (node.count == 0)
+            continue;
+
+        for (uint i = 0; i < node.count; i++)
+        {
+            Circle other = circles[node.firstChild + i];
+            if (circle.id == other.id)
+                continue;
+
+            float distance = length(circle.position - other.position);
+            if (distance < circle.radius + other.radius)
+            {
+                collisionCount++;
+            }
+        }
+
+        if (node.firstChild >= 0)
+        {
+            for (uint i = 0; i < 4; i++)
+            {
+                stack[stackIndex++] = node.firstChild + i;
+            }
+        }
+    }
+}
+
+[numthreads(64, 1, 1)]
+void DetectCollisions(uint3 id : SV_DispatchThreadID)
+{
+    uint circleIndex = id.x;
+    if (circleIndex >= MAX_CIRCLES)
+        return;
+
+    Circle circle = circles[circleIndex];
+    uint collisionCount = 0;
+
+    DetectCollision(circle, 0, collisionCount);
+
+    collisions[circleIndex] = collisionCount;
+}

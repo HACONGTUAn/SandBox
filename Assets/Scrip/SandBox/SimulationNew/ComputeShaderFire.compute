@@ -1,0 +1,122 @@
+﻿#pragma kernel ExternalForces
+#pragma kernel UpdatePositions
+
+
+struct Particle
+{
+    float2 position;
+    float2 velocity;
+    float activeStatus;
+};
+
+RWStructuredBuffer<Particle> Particles;
+
+const float gravity;
+const float2 boundsSize;
+const float2 obstacleCentre;
+const float collisionDamping;
+const float deltaTime;
+const uint numParticles;
+
+float Random(float n)
+{
+    return frac(sin(n) * 43758.5453123) * 2.0 - 1.0;
+}
+float2 ExternalForces(float2 pos, float2 velocity, uint x)
+{
+	// Gravity
+    
+    float2 gravityAccel = float2(Random(x), gravity);
+	
+	
+    //if (interactionInputStrength != 0)
+    //{
+    //    float2 inputPointOffset = interactionInputPoint - pos;
+    //    float sqrDst = dot(inputPointOffset, inputPointOffset);
+    //    if (sqrDst < interactionInputRadius * interactionInputRadius)
+    //    {
+    //        float dst = sqrt(sqrDst);
+    //        float edgeT = (dst / interactionInputRadius);
+    //        float centreT = 1 - edgeT;
+    //        float2 dirToCentre = inputPointOffset / dst;
+
+    //        float gravityWeight = 1 - (centreT * saturate(interactionInputStrength / 10));
+    //        float2 accel = gravityAccel * gravityWeight + dirToCentre * centreT * interactionInputStrength;
+    //        accel -= velocity * centreT;
+    //        return accel;
+    //    }
+    //}
+
+    return gravityAccel;
+}
+
+[numthreads(10, 1, 1)]
+void ExternalForces(uint3 id : SV_DispatchThreadID)
+{
+    
+    if (id.x >= numParticles)
+        return;
+	// External forces (gravity and input interaction)
+    Particles[id.x].position += ExternalForces(Particles[id.x].position, Particles[id.x].velocity, id.x) * deltaTime;
+
+	// Predict
+   // const float predictionFactor = 1 / 120.0;
+    //PredictedPositions[id.x] = Positions[id.x] + Velocities[id.x] * predictionFactor;
+}
+
+void HandleCollisions(uint particleIndex)
+{
+  //  float2 pos = Positions[particleIndex];
+ //   float2 vel = Velocities[particleIndex];
+    float2 pos = Particles[particleIndex].position;
+
+    float2 vel = Particles[particleIndex].velocity;
+    
+    float time = Particles[particleIndex].activeStatus;
+   // Tính toán giới hạn bounds với tâm mới
+    float2 minBounds = obstacleCentre - boundsSize * 0.5;
+    float2 maxBounds = obstacleCentre + boundsSize * 0.5;
+
+  
+
+    if (time > 0)
+    {
+        time -= deltaTime; 
+    }
+  
+   // Kiểm tra và xử lý va chạm với bounds
+    if (pos.x < minBounds.x)
+    {
+        pos.x = minBounds.x;
+        vel.x *= -1 * collisionDamping;
+    }
+    else if (pos.x > maxBounds.x)
+    {
+        pos.x = maxBounds.x;
+        vel.x *= -1 * collisionDamping;
+    }
+
+    if (pos.y < minBounds.y)
+    {
+        pos.y = minBounds.y;
+        vel.y *= -1 * collisionDamping;
+    }
+    else if (pos.y > maxBounds.y)
+    {
+        pos.y = maxBounds.y;
+        vel.y *= -1 * collisionDamping;
+    }
+    Particles[particleIndex].activeStatus = time;
+    Particles[particleIndex].position = pos;
+    Particles[particleIndex].velocity = vel;
+}
+
+[numthreads(10, 1, 1)]
+void UpdatePositions(uint3 id : SV_DispatchThreadID)
+{
+    if (id.x >= numParticles)
+        return;
+    
+    Particles[id.x].position += Particles[id.x].velocity * deltaTime;
+    HandleCollisions(id.x);
+}
